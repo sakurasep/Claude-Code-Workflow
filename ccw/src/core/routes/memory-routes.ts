@@ -371,6 +371,117 @@ export async function handleMemoryRoutes(ctx: RouteContext): Promise<boolean> {
     return true;
   }
 
+  // API: Memory Module - Analyze prompts (frontend compatibility)
+  if (pathname === '/api/memory/analyze' && req.method === 'POST') {
+    handlePostRequest(req, res, async (body: any) => {
+      const projectPath = body.path || initialPath;
+      const tool = body.tool || getDefaultTool(projectPath);
+      const limit = typeof body.limit === 'number' ? body.limit : 50;
+      const promptIds = Array.isArray(body.promptIds) ? new Set(body.promptIds.map(String)) : null;
+
+      try {
+        let prompts;
+        const { getAggregatedPrompts } = await import('../memory-store.js');
+        prompts = await getAggregatedPrompts(projectPath, Math.max(limit, 20));
+
+        if (promptIds && promptIds.size > 0) {
+          prompts = prompts.filter((p: any) => promptIds.has(String(p.id)));
+        }
+
+        const total = prompts.length;
+        const now = new Date().toISOString();
+        const intentCounts = new Map<string, number>();
+        let totalLength = 0;
+        let shortCount = 0;
+        let longCount = 0;
+
+        for (const prompt of prompts) {
+          const text = String(prompt.prompt_text || prompt.text || '');
+          const intent = String(prompt.intent_label || prompt.intent || 'unknown');
+          totalLength += text.length;
+          intentCounts.set(intent, (intentCounts.get(intent) || 0) + 1);
+          if (text.length < 30) shortCount += 1;
+          if (text.length > 300) longCount += 1;
+        }
+
+        const sortedIntents = Array.from(intentCounts.entries()).sort((a, b) => b[1] - a[1]);
+        const topIntent = sortedIntents[0]?.[0] || 'unknown';
+        const avgLength = total > 0 ? Math.round(totalLength / total) : 0;
+
+        const insights: any[] = [];
+        const patterns: any[] = [];
+        const suggestions: any[] = [];
+
+        insights.push({
+          id: `insight-overview-${Date.now()}`,
+          promptId: 'aggregate',
+          type: 'optimization',
+          content: `Analyzed ${total} prompts using ${tool}. Top intent: ${topIntent}. Average prompt length: ${avgLength} characters.`,
+          confidence: 0.85,
+          timestamp: now,
+        });
+
+        if (shortCount > 0) {
+          patterns.push({
+            id: 'pattern-short-prompts',
+            name: 'Short prompts',
+            description: `${shortCount} prompts are very short and may lack context.`,
+            example: 'Add goal, constraints, and target files to improve quality.',
+            severity: shortCount / Math.max(total, 1) > 0.3 ? 'warning' : 'info',
+          });
+          suggestions.push({
+            id: 'suggestion-add-context',
+            type: 'optimize',
+            title: 'Add more task context to short prompts',
+            description: 'Include goal, expected outcome, and relevant files when prompts are very short.',
+            effort: 'low',
+            timestamp: now,
+          });
+        }
+
+        if (longCount > 0) {
+          patterns.push({
+            id: 'pattern-long-prompts',
+            name: 'Long prompts',
+            description: `${longCount} prompts are long and may benefit from stronger structure.`,
+            example: 'Use bullets for goals, constraints, and validation steps.',
+            severity: 'info',
+          });
+          suggestions.push({
+            id: 'suggestion-structure-prompts',
+            type: 'refactor',
+            title: 'Structure long prompts into sections',
+            description: 'Break long prompts into Purpose / Constraints / Expected Output for better model performance.',
+            effort: 'low',
+            timestamp: now,
+          });
+        }
+
+        if (sortedIntents.length > 1) {
+          patterns.push({
+            id: 'pattern-intent-distribution',
+            name: 'Intent distribution',
+            description: `Detected ${sortedIntents.length} distinct intent categories. Dominant intent is ${topIntent}.`,
+            severity: 'info',
+          });
+          suggestions.push({
+            id: 'suggestion-intent-specific-templates',
+            type: 'document',
+            title: 'Create intent-specific prompt templates',
+            description: 'Recurring intents suggest reusable templates for analysis, fixes, and planning requests.',
+            effort: 'medium',
+            timestamp: now,
+          });
+        }
+
+        return { insights, patterns, suggestions };
+      } catch (error: unknown) {
+        return { error: (error as Error).message, status: 500 };
+      }
+    });
+    return true;
+  }
+
   // API: Memory Module - Get prompt history
   if (pathname === '/api/memory/prompts') {
     const projectPath = url.searchParams.get('path') || initialPath;
