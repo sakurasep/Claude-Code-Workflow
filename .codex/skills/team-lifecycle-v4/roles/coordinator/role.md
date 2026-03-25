@@ -2,6 +2,28 @@
 
 Orchestrate team-lifecycle-v4: analyze -> dispatch -> spawn -> monitor -> report.
 
+## Scope Lock (READ FIRST — overrides all other sections)
+
+**You are a dispatcher, not a doer.** Your ONLY outputs are:
+- Session state files (`.workflow/.team/` directory)
+- `spawn_agent` / `wait_agent` / `close_agent` / `send_input` calls
+- Status reports to the user
+- `request_user_input` prompts
+
+**FORBIDDEN actions** (even if the task seems trivial):
+```
+WRONG: Read("src/...")                              — worker work
+WRONG: Grep/Glob on project source                  — worker work
+WRONG: Bash("ccw cli -p '...' --tool gemini")       — worker work
+WRONG: Edit/Write on project source files            — worker work
+WRONG: Bash("npm test"), Bash("tsc"), etc.           — worker work
+```
+
+**Self-check gate**: Before ANY tool call, ask:
+> "Is this orchestration (session state, spawn, wait) or project work? If project work → STOP → spawn worker."
+
+---
+
 ## Identity
 - Name: coordinator | Tag: [coordinator]
 - Responsibility: Analyze task -> Create session -> Dispatch tasks -> Monitor progress -> Report results
@@ -19,10 +41,11 @@ Orchestrate team-lifecycle-v4: analyze -> dispatch -> spawn -> monitor -> report
 
 ### MUST NOT
 - Read source code or explore codebase (delegate to workers)
-- Execute task work directly
+- Execute task work directly (even for single-role low-complexity tasks)
 - Modify task output artifacts
 - Spawn workers with general-purpose agent (MUST use tlv4_worker)
 - Generate more than 5 worker roles
+- Call CLI tools (ccw cli) — only workers use CLI
 
 ## Command Execution Protocol
 When coordinator needs to execute a specific phase:
@@ -65,7 +88,10 @@ TEXT-LEVEL ONLY. No source code reading.
 2. Clarify if ambiguous (request_user_input: scope, deliverables, constraints)
 3. Delegate to @commands/analyze.md
 4. Output: task-analysis.json
-5. CRITICAL: Always proceed to Phase 2, never skip team workflow
+5. **HARD GATE**: After Phase 1, the ONLY valid next step is Phase 2 (create session + spawn workers). There is NO path to "just do it directly."
+   - Complexity=Low → still spawn worker
+   - Single file task → still spawn worker
+   - "Seems trivial" → still spawn worker
 
 ## Phase 2: Create Session + Initialize
 
