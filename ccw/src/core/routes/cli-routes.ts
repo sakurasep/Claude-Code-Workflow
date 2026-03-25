@@ -316,8 +316,102 @@ export function updateActiveExecution(event: {
  * Handle CLI routes
  * @returns true if route was handled, false otherwise
  */
+function mapCliInstallation(tool: string, status: {
+  available?: boolean;
+  enabled?: boolean;
+  path?: string | null;
+  packageName?: string;
+}): Record<string, unknown> {
+  return {
+    name: tool,
+    version: status.packageName || 'unknown',
+    installed: Boolean(status.available),
+    path: status.path || undefined,
+    status: status.available ? (status.enabled === false ? 'inactive' : 'active') : 'inactive',
+    lastChecked: new Date().toISOString(),
+  };
+}
+
 export async function handleCliRoutes(ctx: RouteContext): Promise<boolean> {
   const { pathname, url, req, res, initialPath, handlePostRequest, broadcastToClients } = ctx;
+
+  // Compatibility API: CLI installations list
+  if (pathname === '/api/cli/installations' && req.method === 'GET') {
+    const fullStatus = await getCliToolsFullStatus();
+    const tools = Object.entries(fullStatus).map(([tool, status]) => mapCliInstallation(tool, status));
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ tools }));
+    return true;
+  }
+
+  const cliInstallationMatch = pathname.match(/^\/api\/cli\/installations\/([^/]+)\/(install|uninstall|upgrade|check)$/);
+  if (cliInstallationMatch && req.method === 'POST') {
+    const tool = decodeURIComponent(cliInstallationMatch[1]);
+    const action = cliInstallationMatch[2];
+
+    if (action === 'check') {
+      const fullStatus = await getCliToolsFullStatus();
+      const status = fullStatus[tool];
+      if (!status) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unknown tool' }));
+        return true;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(mapCliInstallation(tool, status)));
+      return true;
+    }
+
+    if (action === 'install') {
+      const result = await installCliTool(tool);
+      if (!result.success) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: result.error || 'Install failed' }));
+        return true;
+      }
+      broadcastToClients({
+        type: 'CLI_TOOL_INSTALLED',
+        payload: { tool, timestamp: new Date().toISOString() }
+      });
+      const fullStatus = await getCliToolsFullStatus();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(mapCliInstallation(tool, fullStatus[tool] || { available: true, enabled: true, path: null, packageName: 'unknown' })));
+      return true;
+    }
+
+    if (action === 'uninstall') {
+      const result = await uninstallCliTool(tool);
+      if (!result.success) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: result.error || 'Uninstall failed' }));
+        return true;
+      }
+      broadcastToClients({
+        type: 'CLI_TOOL_UNINSTALLED',
+        payload: { tool, timestamp: new Date().toISOString() }
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+      return true;
+    }
+
+    if (action === 'upgrade') {
+      const installResult = await installCliTool(tool);
+      if (!installResult.success) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: installResult.error || 'Upgrade failed' }));
+        return true;
+      }
+      broadcastToClients({
+        type: 'CLI_TOOL_UPGRADED',
+        payload: { tool, timestamp: new Date().toISOString() }
+      });
+      const fullStatus = await getCliToolsFullStatus();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(mapCliInstallation(tool, fullStatus[tool] || { available: true, enabled: true, path: null, packageName: 'unknown' })));
+      return true;
+    }
+  }
 
   // API: Get Active CLI Executions (for state recovery)
   if (pathname === '/api/cli/active' && req.method === 'GET') {
