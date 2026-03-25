@@ -513,26 +513,22 @@ function getEmptyDashboardStats(): DashboardStats {
  * @param projectPath - Optional project path to filter data by workspace
  */
 export async function fetchSessions(projectPath?: string): Promise<SessionsResponse> {
-  try {
-    const url = projectPath ? `/api/data?path=${encodeURIComponent(projectPath)}` : '/api/data';
-    const data = await fetchApi<{
-      activeSessions?: BackendSessionData[];
-      archivedSessions?: BackendSessionData[];
-    }>(url);
+  const restUrl = '/api/sessions';
+  const legacyUrl = projectPath ? `/api/data?path=${encodeURIComponent(projectPath)}` : '/api/data';
 
-    // Validate response structure
+  const transformSessionsResponse = (data: {
+    activeSessions?: BackendSessionData[];
+    archivedSessions?: BackendSessionData[];
+  }): SessionsResponse => {
     if (!data) {
-      console.warn('[API] No data received from /api/data for sessions');
       return { activeSessions: [], archivedSessions: [] };
     }
 
-    // Transform active sessions with location = 'active'
     const activeSessions = (data.activeSessions ?? []).map((session) => {
       try {
         return transformBackendSession(session, 'active');
       } catch (error) {
         console.error('[API] Failed to transform active session:', session, error);
-        // Return a minimal valid session to prevent crashes
         return {
           session_id: session.session_id,
           title: session.project || session.session_id,
@@ -543,13 +539,11 @@ export async function fetchSessions(projectPath?: string): Promise<SessionsRespo
       }
     });
 
-    // Transform archived sessions with location = 'archived'
     const archivedSessions = (data.archivedSessions ?? []).map((session) => {
       try {
         return transformBackendSession(session, 'archived');
       } catch (error) {
         console.error('[API] Failed to transform archived session:', session, error);
-        // Return a minimal valid session to prevent crashes
         return {
           session_id: session.session_id,
           title: session.project || session.session_id,
@@ -561,9 +555,37 @@ export async function fetchSessions(projectPath?: string): Promise<SessionsRespo
     });
 
     return { activeSessions, archivedSessions };
+  };
+
+  try {
+    const restData = await fetchApi<{
+      activeSessions?: BackendSessionData[];
+      archivedSessions?: BackendSessionData[];
+    }>(restUrl);
+
+    if (restData && (Array.isArray(restData.activeSessions) || Array.isArray(restData.archivedSessions))) {
+      return transformSessionsResponse(restData);
+    }
+
+    console.warn('[API] /api/sessions returned unexpected structure, falling back to /api/data');
+  } catch (error) {
+    console.warn('[API] Failed to fetch sessions from /api/sessions, falling back to /api/data:', error);
+  }
+
+  try {
+    const legacyData = await fetchApi<{
+      activeSessions?: BackendSessionData[];
+      archivedSessions?: BackendSessionData[];
+    }>(legacyUrl);
+
+    if (!legacyData) {
+      console.warn('[API] No data received from /api/data for sessions');
+      return { activeSessions: [], archivedSessions: [] };
+    }
+
+    return transformSessionsResponse(legacyData);
   } catch (error) {
     console.error('[API] Failed to fetch sessions:', error);
-    // Return empty arrays on error to prevent crashes
     return { activeSessions: [], archivedSessions: [] };
   }
 }

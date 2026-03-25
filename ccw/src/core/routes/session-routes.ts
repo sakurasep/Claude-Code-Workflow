@@ -598,10 +598,14 @@ async function readSessionMetadata(sessionPath: string): Promise<Record<string, 
   return JSON.parse(await readFile(metaFile, 'utf8')) as Record<string, unknown>;
 }
 
-function mapSessionMetadata(meta: Record<string, unknown>, location: 'active' | 'archived') {
+async function hasDirectory(sessionPath: string, dirName: string): Promise<boolean> {
+  return fileExists(join(sessionPath, dirName));
+}
+
+async function mapSessionMetadata(meta: Record<string, unknown>, location: 'active' | 'archived', sessionPath?: string) {
   const rawStatus = String(meta.status || 'active');
   const status = rawStatus === 'active' ? 'in_progress' : rawStatus;
-  return {
+  const base = {
     session_id: String(meta.session_id || ''),
     title: String(meta.title || meta.project || meta.description || meta.session_id || ''),
     description: String(meta.description || ''),
@@ -612,7 +616,23 @@ function mapSessionMetadata(meta: Record<string, unknown>, location: 'active' | 
     archived_at: meta.archived_at || null,
     project: String(meta.project || ''),
     location,
-  };
+    path: sessionPath,
+  } as Record<string, unknown>;
+
+  if (sessionPath) {
+    const hasPlan = await fileExists(join(sessionPath, 'IMPL_PLAN.md')) || await fileExists(join(sessionPath, 'plan.json'));
+    const hasReview = await hasDirectory(sessionPath, '.review');
+    const tasks = await listSessionTasks(sessionPath);
+    return {
+      ...base,
+      has_plan: hasPlan,
+      hasReview,
+      tasks,
+      summaries: [],
+    };
+  }
+
+  return base;
 }
 
 async function listSessionTasks(sessionPath: string): Promise<Array<Record<string, unknown>>> {
@@ -636,8 +656,9 @@ async function scanRestSessions(initialPath: string): Promise<{ activeSessions: 
 
   for (const sessionId of await listSessionIds(activeDir)) {
     try {
-      const meta = await readSessionMetadata(join(activeDir, sessionId));
-      activeSessions.push(mapSessionMetadata(meta, 'active'));
+      const sessionPath = join(activeDir, sessionId);
+      const meta = await readSessionMetadata(sessionPath);
+      activeSessions.push(await mapSessionMetadata(meta, 'active', sessionPath));
     } catch {
       // ignore invalid session dirs
     }
@@ -645,8 +666,9 @@ async function scanRestSessions(initialPath: string): Promise<{ activeSessions: 
 
   for (const sessionId of await listSessionIds(archivedDir)) {
     try {
-      const meta = await readSessionMetadata(join(archivedDir, sessionId));
-      archivedSessions.push(mapSessionMetadata(meta, 'archived'));
+      const sessionPath = join(archivedDir, sessionId);
+      const meta = await readSessionMetadata(sessionPath);
+      archivedSessions.push(await mapSessionMetadata(meta, 'archived', sessionPath));
     } catch {
       // ignore invalid session dirs
     }
@@ -705,7 +727,7 @@ export async function handleSessionRoutes(ctx: RouteContext): Promise<boolean> {
       };
       writeFileSync(join(sessionPath, 'workflow-session.json'), JSON.stringify(meta, null, 2), 'utf8');
 
-      return { ...mapSessionMetadata(meta, 'active'), status: 201 };
+      return { ...(await mapSessionMetadata(meta, 'active', sessionPath)), status: 201 };
     });
     return true;
   }
@@ -721,7 +743,7 @@ export async function handleSessionRoutes(ctx: RouteContext): Promise<boolean> {
     }
     const meta = await readSessionMetadata(found.path);
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(mapSessionMetadata(meta, found.archived ? 'archived' : 'active')));
+    res.end(JSON.stringify(await mapSessionMetadata(meta, found.archived ? 'archived' : 'active', found.path)));
     return true;
   }
 
@@ -741,7 +763,7 @@ export async function handleSessionRoutes(ctx: RouteContext): Promise<boolean> {
       }
       meta.updated_at = new Date().toISOString();
       writeFileSync(join(found.path, 'workflow-session.json'), JSON.stringify(meta, null, 2), 'utf8');
-      return mapSessionMetadata(meta, found.archived ? 'archived' : 'active');
+      return await mapSessionMetadata(meta, found.archived ? 'archived' : 'active', found.path);
     });
     return true;
   }
@@ -779,12 +801,12 @@ export async function handleSessionRoutes(ctx: RouteContext): Promise<boolean> {
       meta.updated_at = new Date().toISOString();
       writeFileSync(join(targetPath, 'workflow-session.json'), JSON.stringify(meta, null, 2), 'utf8');
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(mapSessionMetadata(meta, 'archived')));
+      res.end(JSON.stringify(await mapSessionMetadata(meta, 'archived', targetPath)));
       return true;
     }
     const meta = await readSessionMetadata(found.path);
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(mapSessionMetadata(meta, 'archived')));
+    res.end(JSON.stringify(await mapSessionMetadata(meta, 'archived', found.path)));
     return true;
   }
 
