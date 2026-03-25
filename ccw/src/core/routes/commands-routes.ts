@@ -1033,6 +1033,48 @@ export async function handleCommandsRoutes(ctx: RouteContext): Promise<boolean> 
     return true;
   }
 
+  // GET /api/commands/groups/config - Read commands groups config
+  if (pathname === '/api/commands/groups/config' && req.method === 'GET') {
+    const locationParam = url.searchParams.get('location');
+    const projectPathParam = url.searchParams.get('path') || initialPath;
+    const location: CommandLocation = locationParam === 'user' ? 'user' : 'project';
+    const config = loadGroupsConfig(location, projectPathParam);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(config));
+    return true;
+  }
+
+  // POST /api/commands/validate-import - Validate source command file
+  if (pathname === '/api/commands/validate-import' && req.method === 'POST') {
+    handlePostRequest(req, res, async (body) => {
+      if (!isRecord(body) || typeof body.sourcePath !== 'string' || body.sourcePath.trim() === '') {
+        return { valid: false, errors: ['sourcePath is required'], status: 400 };
+      }
+
+      try {
+        const validatedSourcePath = await validateAllowedPath(body.sourcePath, { mustExist: true, allowedDirectories: [initialPath, homedir()] });
+        const result = validateCommandFile(validatedSourcePath);
+        if (!result.valid) {
+          return { valid: false, errors: result.errors };
+        }
+        return {
+          valid: true,
+          errors: [],
+          commandInfo: {
+            name: result.commandInfo.name,
+            description: result.commandInfo.description,
+          }
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = message.includes('Access denied') ? 403 : (message.includes('not exist') ? 404 : 400);
+        return { valid: false, errors: [status === 403 ? 'Access denied' : (status === 404 ? 'Command file does not exist' : message)], status };
+      }
+    });
+    return true;
+  }
+
   // POST /api/commands/create - Create command (upload or generate)
   if (pathname === '/api/commands/create' && req.method === 'POST') {
     handlePostRequest(req, res, async (body) => {
