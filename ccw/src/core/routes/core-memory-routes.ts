@@ -386,9 +386,11 @@ export async function handleCoreMemoryRoutes(ctx: RouteContext): Promise<boolean
   }
 
   // API: Selective extraction for specific sessions
-  if (pathname === '/api/core-memory/extract/selected' && req.method === 'POST') {
+  if ((pathname === '/api/core-memory/extract/selected' || pathname === '/api/core-memory/extract/selective') && req.method === 'POST') {
     handlePostRequest(req, res, async (body) => {
-      const { sessionIds, includeNative, path: projectPath } = body;
+      const sessionIds = Array.isArray(body?.sessionIds) ? body.sessionIds : body?.session_ids;
+      const includeNative = typeof body?.includeNative === 'boolean' ? body.includeNative : body?.include_native;
+      const projectPath = body?.path;
       const basePath = projectPath || initialPath;
 
       // Validate sessionIds - return 400 for invalid input
