@@ -1,3 +1,9 @@
+# Project files
+ccw-view-test/
+
+# idea
+.idea/
+
 # History and temp files
 .history
 *.tmp

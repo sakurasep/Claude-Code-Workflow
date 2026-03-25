@@ -281,6 +281,62 @@ function deleteHookFromSettings(
   }
 }
 
+function parseHookName(hookName: string): { scope: 'global' | 'project'; event: string; index: number } | null {
+  const parts = hookName.split('-');
+  if (parts.length < 3) return null;
+  const scope = parts[0];
+  const indexStr = parts[parts.length - 1];
+  const event = parts.slice(1, -1).join('-');
+  const index = Number(indexStr);
+
+  if ((scope !== 'global' && scope !== 'project') || !event || Number.isNaN(index)) {
+    return null;
+  }
+
+  return { scope, event, index } as { scope: 'global' | 'project'; event: string; index: number };
+}
+
+function getHookEntry(projectPath: string, scope: 'global' | 'project', event: string, hookIndex: number): Record<string, unknown> | null {
+  const hooksData = getHooksConfig(projectPath);
+  const scopeData = hooksData[scope];
+  const hooks = scopeData?.hooks as Record<string, unknown[]> | undefined;
+  if (!hooks || !Array.isArray(hooks[event]) || hookIndex < 0 || hookIndex >= hooks[event].length) {
+    return null;
+  }
+  return hooks[event][hookIndex] as Record<string, unknown>;
+}
+
+function mapHookResponse(
+  hookName: string,
+  scope: 'global' | 'project',
+  event: string,
+  hookIndex: number,
+  hookEntry: Record<string, unknown>,
+): Record<string, unknown> {
+  let command = '';
+  if (Array.isArray(hookEntry.hooks) && hookEntry.hooks.length > 0) {
+    command = (hookEntry.hooks as Array<Record<string, unknown>>)
+      .map((h) => String(h.command || h.prompt || ''))
+      .filter(Boolean)
+      .join(' && ');
+  }
+  if (!command && typeof hookEntry.command === 'string') {
+    command = hookEntry.command;
+  }
+
+  return {
+    name: hookName,
+    description: typeof hookEntry.description === 'string' ? hookEntry.description : undefined,
+    enabled: true,
+    command,
+    trigger: event,
+    matcher: typeof hookEntry.matcher === 'string' ? hookEntry.matcher : undefined,
+    scope,
+    index: hookIndex,
+    templateId: typeof hookEntry._templateId === 'string' ? hookEntry._templateId : undefined,
+  };
+}
+
 // ========================================
 // Session State Tracking
 // ========================================
@@ -660,6 +716,53 @@ export async function handleHooksRoutes(ctx: HooksRouteContext): Promise<boolean
     return true;
   }
 
+  // API: Create hook (frontend compatibility)
+  if (pathname === '/api/hooks/create' && req.method === 'POST') {
+    handlePostRequest(req, res, async (body) => {
+      if (typeof body !== 'object' || body === null) {
+        return { error: 'Invalid request body', status: 400 };
+      }
+
+      const { name, description, trigger, matcher, command } = body as {
+        name?: unknown;
+        description?: unknown;
+        trigger?: unknown;
+        matcher?: unknown;
+        command?: unknown;
+      };
+
+      if (typeof trigger !== 'string' || typeof command !== 'string') {
+        return { error: 'trigger and command are required', status: 400 };
+      }
+
+      const parsed = typeof name === 'string' ? parseHookName(name) : null;
+      const scope = parsed?.scope || 'project';
+      const projectPath = initialPath;
+
+      const saveResult = saveHookToSettings(projectPath, scope, trigger, {
+        command,
+        ...(typeof matcher === 'string' ? { matcher } : {}),
+        ...(typeof description === 'string' ? { description } : {}),
+      });
+
+      if (saveResult.error) {
+        return { error: saveResult.error, status: 500 };
+      }
+
+      const hooksData = getHooksConfig(projectPath);
+      const scopeHooks = hooksData[scope].hooks as Record<string, unknown[]>;
+      const index = Array.isArray(scopeHooks?.[trigger]) ? scopeHooks[trigger].length - 1 : 0;
+      const hookEntry = getHookEntry(projectPath, scope, trigger, index);
+      const hookName = `${scope}-${trigger}-${index}`;
+
+      return {
+        ...mapHookResponse(hookName, scope, trigger, index, hookEntry || { command, matcher, description }),
+        status: 201,
+      };
+    });
+    return true;
+  }
+
   // API: Save hook
   if (pathname === '/api/hooks' && req.method === 'POST') {
     handlePostRequest(req, res, async (body) => {
@@ -680,6 +783,149 @@ export async function handleHooksRoutes(ctx: HooksRouteContext): Promise<boolean
 
       const resolvedProjectPath = typeof projectPath === 'string' && projectPath.trim().length > 0 ? projectPath : initialPath;
       return saveHookToSettings(resolvedProjectPath, scope, event, hookData as Record<string, unknown>);
+    });
+    return true;
+  }
+
+  if (pathname === '/api/hooks/update' && req.method === 'POST') {
+    handlePostRequest(req, res, async (body) => {
+      if (typeof body !== 'object' || body === null) {
+        return { error: 'Invalid request body', status: 400 };
+      }
+      const { name, description, trigger, matcher, command } = body as Record<string, unknown>;
+      if (typeof name !== 'string') {
+        return { error: 'name is required', status: 400 };
+      }
+
+      const parsed = parseHookName(name);
+      if (!parsed) {
+        return { error: 'Invalid hook name', status: 400 };
+      }
+
+      const { scope, event, index } = parsed;
+      const projectPath = initialPath;
+      const targetEvent = typeof trigger === 'string' && trigger.trim().length > 0 ? trigger : event;
+      const existing = getHookEntry(projectPath, scope, event, index);
+      if (!existing) {
+        return { error: 'Hook not found', status: 404 };
+      }
+
+      // If trigger changed, delete old and create new at target event.
+      if (targetEvent !== event) {
+        const delResult = deleteHookFromSettings(projectPath, scope, event, index);
+        if (delResult.error) {
+          return { error: delResult.error, status: 500 };
+        }
+        const createResult = saveHookToSettings(projectPath, scope, targetEvent, {
+          command: typeof command === 'string' ? command : (Array.isArray(existing.hooks) && existing.hooks.length > 0 ? String((existing.hooks as Array<Record<string, unknown>>)[0].command || '') : String(existing.command || '')),
+          matcher: typeof matcher === 'string' ? matcher : existing.matcher,
+          description: typeof description === 'string' ? description : existing.description,
+        });
+        if (createResult.error) {
+          return { error: createResult.error, status: 500 };
+        }
+        const hooksData = getHooksConfig(projectPath);
+        const scopeHooks = hooksData[scope].hooks as Record<string, unknown[]>;
+        const newIndex = Array.isArray(scopeHooks?.[targetEvent]) ? scopeHooks[targetEvent].length - 1 : 0;
+        const created = getHookEntry(projectPath, scope, targetEvent, newIndex);
+        return mapHookResponse(`${scope}-${targetEvent}-${newIndex}`, scope, targetEvent, newIndex, created || {});
+      }
+
+      const updates = {
+        description,
+        matcher,
+        command,
+      };
+      const currentCommand = Array.isArray(existing.hooks) && existing.hooks.length > 0
+        ? String((existing.hooks as Array<Record<string, unknown>>)[0].command || '')
+        : String(existing.command || '');
+      const saveResult = saveHookToSettings(projectPath, scope, event, {
+        command: typeof updates.command === 'string' ? updates.command : currentCommand,
+        matcher: typeof updates.matcher === 'string' ? updates.matcher : existing.matcher,
+        description: typeof updates.description === 'string' ? updates.description : existing.description,
+        replaceIndex: index,
+      });
+      if (saveResult.error) {
+        return { error: saveResult.error, status: 500 };
+      }
+      const updated = getHookEntry(projectPath, scope, event, index);
+      return mapHookResponse(name, scope, event, index, updated || {});
+    });
+    return true;
+  }
+
+  const hookToggleMatch = pathname.match(/^\/api\/hooks\/([^/]+)\/toggle$/);
+  if (hookToggleMatch && req.method === 'POST') {
+    const hookName = decodeURIComponent(hookToggleMatch[1]);
+    handlePostRequest(req, res, async (body) => {
+      const parsed = parseHookName(hookName);
+      if (!parsed) {
+        return { error: 'Invalid hook name', status: 400 };
+      }
+      const { scope, event, index } = parsed;
+      const projectPath = initialPath;
+      const existing = getHookEntry(projectPath, scope, event, index);
+      if (!existing) {
+        return { error: 'Hook not found', status: 404 };
+      }
+
+      const enabled = typeof body?.enabled === 'boolean' ? body.enabled : true;
+      if (enabled) {
+        return mapHookResponse(hookName, scope, event, index, existing);
+      }
+
+      const delResult = deleteHookFromSettings(projectPath, scope, event, index);
+      if (delResult.error) {
+        return { error: delResult.error, status: 500 };
+      }
+      return {
+        name: hookName,
+        enabled: false,
+        trigger: event,
+        scope,
+        index,
+      };
+    });
+    return true;
+  }
+
+  const hookPatchMatch = pathname.match(/^\/api\/hooks\/([^/]+)$/);
+  if (hookPatchMatch && req.method === 'PATCH') {
+    const hookName = decodeURIComponent(hookPatchMatch[1]);
+    handlePostRequest(req, res, async (body) => {
+      const parsed = parseHookName(hookName);
+      if (!parsed) {
+        return { error: 'Invalid hook name', status: 400 };
+      }
+
+      const { scope, event, index } = parsed;
+      const projectPath = initialPath;
+      const existing = getHookEntry(projectPath, scope, event, index);
+      if (!existing) {
+        return { error: 'Hook not found', status: 404 };
+      }
+
+      const updates = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
+      const currentCommand = Array.isArray(existing.hooks) && existing.hooks.length > 0
+        ? String((existing.hooks as Array<Record<string, unknown>>)[0].command || '')
+        : String(existing.command || '');
+
+      const saveResult = saveHookToSettings(projectPath, scope, event, {
+        command: typeof updates.command === 'string' ? updates.command : currentCommand,
+        matcher: typeof updates.matcher === 'string' ? updates.matcher : existing.matcher,
+        description: typeof updates.description === 'string' ? updates.description : existing.description,
+        replaceIndex: index,
+      });
+
+      if (saveResult.error) {
+        return { error: saveResult.error, status: 500 };
+      }
+
+      const updated = getHookEntry(projectPath, scope, event, index);
+      if (!updated) {
+        return { error: 'Hook not found after update', status: 500 };
+      }
+      return mapHookResponse(hookName, scope, event, index, updated);
     });
     return true;
   }
