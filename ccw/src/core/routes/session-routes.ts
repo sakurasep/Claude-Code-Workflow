@@ -2,7 +2,7 @@
  * Session Routes Module
  * Handles all Session/Task-related API endpoints
  */
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import { readFile, readdir, access } from 'fs/promises';
 import { join } from 'path';
 import type { RouteContext } from './types.js';
@@ -560,11 +560,99 @@ async function updateTaskStatus(sessionPath: string, taskId: string, newStatus: 
       taskId,
       oldStatus,
       newStatus,
-      file: taskFile
+      file: taskFile,
+      ...content
     };
   } catch (error: unknown) {
     throw new Error(`Failed to update task ${taskId}: ${(error as Error).message}`);
   }
+}
+
+function getWorkflowRoot(initialPath: string): string {
+  return join(initialPath, '.workflow');
+}
+
+function getActiveSessionPath(initialPath: string, sessionId: string): string {
+  return join(getWorkflowRoot(initialPath), 'active', sessionId);
+}
+
+function getArchivedSessionPath(initialPath: string, sessionId: string): string {
+  return join(getWorkflowRoot(initialPath), 'archives', sessionId);
+}
+
+async function findSessionPath(initialPath: string, sessionId: string): Promise<{ path: string; archived: boolean } | null> {
+  const activePath = getActiveSessionPath(initialPath, sessionId);
+  if (existsSync(activePath)) return { path: activePath, archived: false };
+
+  const archivedPath = getArchivedSessionPath(initialPath, sessionId);
+  if (existsSync(archivedPath)) return { path: archivedPath, archived: true };
+
+  return null;
+}
+
+async function readSessionMetadata(sessionPath: string): Promise<Record<string, unknown>> {
+  const metaFile = join(sessionPath, 'workflow-session.json');
+  if (!(await fileExists(metaFile))) {
+    throw new Error(`Session metadata not found: ${metaFile}`);
+  }
+  return JSON.parse(await readFile(metaFile, 'utf8')) as Record<string, unknown>;
+}
+
+function mapSessionMetadata(meta: Record<string, unknown>, location: 'active' | 'archived') {
+  const rawStatus = String(meta.status || 'active');
+  const status = rawStatus === 'active' ? 'in_progress' : rawStatus;
+  return {
+    session_id: String(meta.session_id || ''),
+    title: String(meta.title || meta.project || meta.description || meta.session_id || ''),
+    description: String(meta.description || ''),
+    status,
+    type: String(meta.type || meta.workflow_type || 'workflow'),
+    created_at: String(meta.created_at || meta.initialized_at || meta.timestamp || ''),
+    updated_at: String(meta.updated_at || meta.created_at || meta.initialized_at || meta.timestamp || ''),
+    archived_at: meta.archived_at || null,
+    project: String(meta.project || ''),
+    location,
+  };
+}
+
+async function listSessionTasks(sessionPath: string): Promise<Array<Record<string, unknown>>> {
+  const detail = await getSessionDetailData(sessionPath, 'tasks');
+  return Array.isArray(detail.tasks) ? detail.tasks as Array<Record<string, unknown>> : [];
+}
+
+async function listSessionIds(dir: string): Promise<string[]> {
+  if (!(await fileExists(dir))) return [];
+  const entries = await readdir(dir, { withFileTypes: true });
+  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+}
+
+async function scanRestSessions(initialPath: string): Promise<{ activeSessions: Array<Record<string, unknown>>; archivedSessions: Array<Record<string, unknown>> }> {
+  const workflowRoot = getWorkflowRoot(initialPath);
+  const activeDir = join(workflowRoot, 'active');
+  const archivedDir = join(workflowRoot, 'archives');
+
+  const activeSessions: Array<Record<string, unknown>> = [];
+  const archivedSessions: Array<Record<string, unknown>> = [];
+
+  for (const sessionId of await listSessionIds(activeDir)) {
+    try {
+      const meta = await readSessionMetadata(join(activeDir, sessionId));
+      activeSessions.push(mapSessionMetadata(meta, 'active'));
+    } catch {
+      // ignore invalid session dirs
+    }
+  }
+
+  for (const sessionId of await listSessionIds(archivedDir)) {
+    try {
+      const meta = await readSessionMetadata(join(archivedDir, sessionId));
+      archivedSessions.push(mapSessionMetadata(meta, 'archived'));
+    } catch {
+      // ignore invalid session dirs
+    }
+  }
+
+  return { activeSessions, archivedSessions };
 }
 
 /**
@@ -572,7 +660,166 @@ async function updateTaskStatus(sessionPath: string, taskId: string, newStatus: 
  * @returns true if route was handled, false otherwise
  */
 export async function handleSessionRoutes(ctx: RouteContext): Promise<boolean> {
-  const { pathname, url, req, res, handlePostRequest } = ctx;
+  const { pathname, url, req, res, handlePostRequest, initialPath } = ctx;
+
+  // REST API: List sessions
+  if (pathname === '/api/sessions' && req.method === 'GET') {
+    const { activeSessions, archivedSessions } = await scanRestSessions(initialPath);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ activeSessions, archivedSessions }));
+    return true;
+  }
+
+  // REST API: Create session
+  if (pathname === '/api/sessions' && req.method === 'POST') {
+    handlePostRequest(req, res, async (body) => {
+      if (typeof body !== 'object' || body === null) {
+        return { error: 'Invalid request body', status: 400 };
+      }
+
+      const { session_id, title, description, status, type } = body as Record<string, unknown>;
+      if (typeof session_id !== 'string' || session_id.trim() === '') {
+        return { error: 'session_id is required', status: 400 };
+      }
+
+      const sessionPath = getActiveSessionPath(initialPath, session_id);
+      if (existsSync(sessionPath)) {
+        return { error: 'Session already exists', status: 409 };
+      }
+
+      mkdirSync(join(sessionPath, '.task'), { recursive: true });
+      mkdirSync(join(sessionPath, '.summaries'), { recursive: true });
+      mkdirSync(join(sessionPath, '.process'), { recursive: true });
+
+      const now = new Date().toISOString();
+      const meta = {
+        session_id,
+        title: typeof title === 'string' ? title : session_id,
+        description: typeof description === 'string' ? description : '',
+        status: typeof status === 'string' ? status : 'initialized',
+        type: typeof type === 'string' ? type : 'workflow',
+        project: typeof title === 'string' ? title : '',
+        created_at: now,
+        updated_at: now,
+      };
+      writeFileSync(join(sessionPath, 'workflow-session.json'), JSON.stringify(meta, null, 2), 'utf8');
+
+      return { ...mapSessionMetadata(meta, 'active'), status: 201 };
+    });
+    return true;
+  }
+
+  const sessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);
+  if (sessionMatch && req.method === 'GET') {
+    const sessionId = decodeURIComponent(sessionMatch[1]);
+    const found = await findSessionPath(initialPath, sessionId);
+    if (!found) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Session not found' }));
+      return true;
+    }
+    const meta = await readSessionMetadata(found.path);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(mapSessionMetadata(meta, found.archived ? 'archived' : 'active')));
+    return true;
+  }
+
+  if (sessionMatch && req.method === 'PATCH') {
+    const sessionId = decodeURIComponent(sessionMatch[1]);
+    handlePostRequest(req, res, async (body) => {
+      const found = await findSessionPath(initialPath, sessionId);
+      if (!found) {
+        return { error: 'Session not found', status: 404 };
+      }
+      const meta = await readSessionMetadata(found.path);
+      const updates = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
+      for (const key of ['title', 'description', 'status', 'type', 'project']) {
+        if (typeof updates[key] === 'string') {
+          meta[key] = updates[key];
+        }
+      }
+      meta.updated_at = new Date().toISOString();
+      writeFileSync(join(found.path, 'workflow-session.json'), JSON.stringify(meta, null, 2), 'utf8');
+      return mapSessionMetadata(meta, found.archived ? 'archived' : 'active');
+    });
+    return true;
+  }
+
+  if (sessionMatch && req.method === 'DELETE') {
+    const sessionId = decodeURIComponent(sessionMatch[1]);
+    const found = await findSessionPath(initialPath, sessionId);
+    if (!found) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Session not found' }));
+      return true;
+    }
+    rmSync(found.path, { recursive: true, force: true });
+    res.writeHead(204, { 'Content-Type': 'application/json' });
+    res.end();
+    return true;
+  }
+
+  const archiveMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/archive$/);
+  if (archiveMatch && req.method === 'POST') {
+    const sessionId = decodeURIComponent(archiveMatch[1]);
+    const found = await findSessionPath(initialPath, sessionId);
+    if (!found) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Session not found' }));
+      return true;
+    }
+    if (!found.archived) {
+      const targetPath = getArchivedSessionPath(initialPath, sessionId);
+      mkdirSync(join(getWorkflowRoot(initialPath), 'archives'), { recursive: true });
+      renameSync(found.path, targetPath);
+      const meta = await readSessionMetadata(targetPath);
+      meta.status = 'archived';
+      meta.archived_at = new Date().toISOString();
+      meta.updated_at = new Date().toISOString();
+      writeFileSync(join(targetPath, 'workflow-session.json'), JSON.stringify(meta, null, 2), 'utf8');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(mapSessionMetadata(meta, 'archived')));
+      return true;
+    }
+    const meta = await readSessionMetadata(found.path);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(mapSessionMetadata(meta, 'archived')));
+    return true;
+  }
+
+  const tasksMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/tasks$/);
+  if (tasksMatch && req.method === 'GET') {
+    const sessionId = decodeURIComponent(tasksMatch[1]);
+    const found = await findSessionPath(initialPath, sessionId);
+    if (!found) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Session not found' }));
+      return true;
+    }
+    const tasks = await listSessionTasks(found.path);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(tasks));
+    return true;
+  }
+
+  const taskUpdateMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/tasks\/([^/]+)$/);
+  if (taskUpdateMatch && req.method === 'PATCH') {
+    const sessionId = decodeURIComponent(taskUpdateMatch[1]);
+    const taskId = decodeURIComponent(taskUpdateMatch[2]);
+    handlePostRequest(req, res, async (body) => {
+      const found = await findSessionPath(initialPath, sessionId);
+      if (!found) {
+        return { error: 'Session not found', status: 404 };
+      }
+      if (typeof body !== 'object' || body === null || typeof (body as Record<string, unknown>).status !== 'string') {
+        return { error: 'status is required', status: 400 };
+      }
+      const result = await updateTaskStatus(found.path, taskId, String((body as Record<string, unknown>).status));
+      return result;
+    });
+    return true;
+  }
 
   // API: Get session detail data (context, summaries, impl-plan, review)
   if (pathname === '/api/session-detail') {
