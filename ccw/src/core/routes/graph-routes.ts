@@ -574,6 +574,73 @@ export async function handleGraphRoutes(ctx: RouteContext): Promise<boolean> {
     return true;
   }
 
+  // API: Graph Dependencies - Combined graph payload for frontend explorer
+  if (pathname === '/api/graph/dependencies' && req.method === 'GET') {
+    const rawPath = url.searchParams.get('rootPath') || url.searchParams.get('path') || initialPath;
+    const projectPathResult = await validateProjectPath(rawPath, initialPath);
+    const includeTypesParam = url.searchParams.get('includeTypes');
+    const includeTypes = includeTypesParam ? new Set(includeTypesParam.split(',').map(s => s.trim()).filter(Boolean)) : null;
+
+    if (projectPathResult.path === null) {
+      res.writeHead(projectPathResult.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: projectPathResult.error, nodes: [], edges: [], metadata: { nodeCount: 0, edgeCount: 0 } }));
+      return true;
+    }
+
+    const projectPath = projectPathResult.path;
+    try {
+      const rawNodes = await querySymbols(projectPath);
+      const rawEdges = await queryRelationships(projectPath);
+
+      const nodes = rawNodes
+        .filter((node) => !includeTypes || includeTypes.has(String(node.type).toLowerCase()) || includeTypes.has(String(node.type)))
+        .map((node, idx) => ({
+          id: node.id,
+          type: 'default',
+          position: { x: (idx % 8) * 220, y: Math.floor(idx / 8) * 120 },
+          data: {
+            label: node.name,
+            category: String(node.type).toLowerCase(),
+            filePath: node.file,
+            lineNumber: node.line,
+          },
+        }));
+
+      const nodeIdSet = new Set(nodes.map((n) => n.id));
+      const edges = rawEdges
+        .filter((edge) => nodeIdSet.has(edge.source) && nodeIdSet.has(edge.target))
+        .map((edge, idx) => ({
+          id: `edge-${idx}-${edge.source}-${edge.target}`,
+          source: edge.source,
+          target: edge.target,
+          data: {
+            label: edge.type,
+            edgeType: String(edge.type).toLowerCase(),
+            lineNumbers: [edge.sourceLine],
+          },
+        }));
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        nodes,
+        edges,
+        metadata: {
+          name: 'Code Dependencies',
+          description: 'Combined symbol and relationship graph',
+          nodeCount: nodes.length,
+          edgeCount: edges.length,
+          updatedAt: new Date().toISOString(),
+          sourcePath: projectPath,
+        }
+      }));
+    } catch (err) {
+      console.error('[Graph] Error fetching dependency graph:', err);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to fetch dependency graph', nodes: [], edges: [], metadata: { nodeCount: 0, edgeCount: 0 } }));
+    }
+    return true;
+  }
+
   // API: Impact Analysis - Get impact analysis for a symbol
   if (pathname === '/api/graph/impact') {
     const rawPath = url.searchParams.get('path') || initialPath;
