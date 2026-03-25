@@ -1840,6 +1840,76 @@ export async function handleOrchestratorRoutes(ctx: RouteContext): Promise<boole
     }
   }
 
+  // ==== GET COORDINATOR PIPELINE COMPATIBILITY DETAILS ====
+  // GET /api/coordinator/pipeline/:execId
+  if (pathname.match(/^\/api\/coordinator\/pipeline\/[^/]+$/) && req.method === 'GET') {
+    const execId = pathname.split('/').pop();
+    if (!execId || !isValidExecutionId(execId)) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: 'Invalid execution ID format' }));
+      return true;
+    }
+
+    try {
+      const execution = await readExecutionStorage(workflowDir, execId);
+      if (!execution) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'Execution not found' }));
+        return true;
+      }
+
+      const flow = await readFlowStorage(workflowDir, execution.flowId);
+      const flowNodes = Array.isArray(flow?.nodes) ? flow.nodes : [];
+      const nodes = flowNodes.map((node) => {
+        const state = execution.nodeStates[node.id] || { status: 'pending' };
+        const data = (node as any).data || {};
+        return {
+          id: node.id,
+          name: data.label || node.id,
+          description: data.instruction || data.description || undefined,
+          command: data.instruction || data.slashCommand || data.command || '',
+          status: state.status,
+          startedAt: state.startedAt,
+          completedAt: state.completedAt,
+          result: state.result,
+          error: state.error,
+          output: typeof state.result === 'string' ? state.result : undefined,
+          parentId: undefined,
+          children: [],
+        };
+      });
+
+      const logs = (execution.logs || []).map((log, idx) => ({
+        id: `${execId}-log-${idx}`,
+        timestamp: log.timestamp,
+        level: (log.level === 'debug' || log.level === 'warn' || log.level === 'error' || log.level === 'info') ? log.level : 'info',
+        message: log.message,
+        nodeId: log.nodeId,
+        source: log.nodeId ? 'node' : 'system',
+      }));
+
+      const coordinatorDetails = {
+        id: execution.id,
+        name: flow?.name || execution.flowId,
+        description: flow?.description,
+        nodes,
+        totalSteps: nodes.length,
+        estimatedDuration: undefined,
+        logs,
+        status: execution.status === 'pending' ? 'initializing' : execution.status,
+        createdAt: execution.startedAt || new Date().toISOString(),
+      };
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, data: coordinatorDetails }));
+      return true;
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: (error as Error).message }));
+      return true;
+    }
+  }
+
   // ============================================================================
   // Template Management Endpoints
   // ============================================================================
