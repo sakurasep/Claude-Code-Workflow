@@ -1,6 +1,6 @@
 ---
 name: analyze-with-file
-description: Interactive collaborative analysis with documented discussions, inline exploration, and evolving understanding. Serial execution with no agent delegation.
+description: Interactive collaborative analysis with documented discussions, inline exploration, and evolving understanding.
 argument-hint: "TOPIC=\"<question or topic>\" [--depth=quick|standard|deep] [--continue]"
 ---
 

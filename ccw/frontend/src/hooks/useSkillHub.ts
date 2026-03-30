@@ -4,72 +4,7 @@
 // React Query hooks for Skill Hub API
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-
-// ============================================================================
-// API Helper
-// ============================================================================
-
-/**
- * Get CSRF token from cookie
- */
-function getCsrfToken(): string | null {
-  const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-/**
- * Typed fetch wrapper with CSRF token handling
- */
-async function fetchApi<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers);
-
-  // Add CSRF token for mutating requests
-  if (options.method && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(options.method)) {
-    const csrfToken = getCsrfToken();
-    if (csrfToken) {
-      headers.set('X-CSRF-Token', csrfToken);
-    }
-  }
-
-  // Set content type for JSON requests
-  if (options.body && typeof options.body === 'string') {
-    headers.set('Content-Type', 'application/json');
-  }
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-    credentials: 'same-origin',
-  });
-
-  if (!response.ok) {
-    const error: { message: string; status: number; code?: string } = {
-      message: response.statusText || 'Request failed',
-      status: response.status,
-    };
-
-    const contentType = response.headers.get('content-type');
-    if (contentType && contentType.includes('application/json')) {
-      try {
-        const body = await response.json();
-        if (body.message) error.message = body.message;
-        else if (body.error) error.message = body.error;
-        if (body.code) error.code = body.code;
-      } catch {
-        // Silently ignore JSON parse errors
-      }
-    }
-
-    throw error;
-  }
-
-  // Handle no-content responses
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  return response.json();
-}
+import { fetchApi } from '@/lib/api';
 
 // ============================================================================
 // Types

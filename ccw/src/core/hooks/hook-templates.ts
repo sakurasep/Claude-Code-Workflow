@@ -126,8 +126,54 @@ function isDangerousCommand(cmd: string): boolean {
     />\s*\/dev\//i,
     /wget.*\|.*sh/i,
     /curl.*\|.*bash/i,
+    /DROP\s+TABLE/i,
+    /TRUNCATE\s+TABLE/i,
+    /kubectl\s+delete/i,
+    /docker\s+(rm|rmi|system\s+prune)/i,
   ];
   return patterns.some(p => p.test(cmd));
+}
+
+/**
+ * Safe deletion targets - directories commonly cleaned in dev workflows
+ */
+const SAFE_DELETE_TARGETS = [
+  'node_modules',
+  '.next',
+  'dist',
+  '__pycache__',
+  '.cache',
+  'coverage',
+  '.turbo',
+  'build',
+];
+
+/**
+ * Check if a destructive command targets only safe directories.
+ * Returns true if the command IS dangerous (not a safe exception).
+ * Returns false if the command targets a safe directory (allow it through).
+ */
+function isDestructiveWithSafeException(cmd: string): boolean {
+  if (!isDangerousCommand(cmd)) {
+    return false;
+  }
+  // Only apply safe exceptions for rm -rf patterns
+  const rmRfMatch = cmd.match(/rm\s+-rf\s+(.+)/i);
+  if (rmRfMatch) {
+    const args = rmRfMatch[1].trim().split(/\s+/);
+    // Every target must match a safe pattern for the exception to apply
+    const allSafe = args.length > 0 && args.every(arg => {
+      const target = arg.replace(/^["']|["']$/g, '').replace(/[/\\]+$/, '');
+      const targetBase = target.split(/[/\\]/).pop() || '';
+      return SAFE_DELETE_TARGETS.some(safe =>
+        targetBase === safe || target === safe
+      );
+    });
+    if (allSafe) {
+      return false; // Safe exception - not dangerous
+    }
+  }
+  return true; // Dangerous, no safe exception applies
 }
 
 /**
@@ -547,6 +593,77 @@ export const HOOK_TEMPLATES: HookTemplate[] = [
             }
           }
         };
+      }
+      return { exitCode: 0 };
+    }
+  },
+
+  {
+    id: 'careful-destructive-guard',
+    name: 'Careful Destructive Guard',
+    description: 'Block destructive commands but allow safe targets (node_modules, dist, .next, etc.)',
+    category: 'protection',
+    trigger: 'PreToolUse',
+    matcher: 'Bash',
+    execute: (data) => {
+      const cmd = (data.tool_input?.command as string) || '';
+      if (isDestructiveWithSafeException(cmd)) {
+        return {
+          exitCode: 0,
+          jsonOutput: {
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'ask',
+              permissionDecisionReason: `Destructive command detected: requires user confirmation`
+            }
+          }
+        };
+      }
+      return { exitCode: 0 };
+    }
+  },
+  {
+    id: 'freeze-edit-boundary',
+    name: 'Freeze Edit Boundary',
+    description: 'Block Write/Edit to files outside locked directories defined in .claude/freeze.json',
+    category: 'protection',
+    trigger: 'PreToolUse',
+    matcher: 'Write|Edit',
+    execute: (data) => {
+      const file = getStringInput(data.tool_input?.file_path);
+      if (!file) {
+        return { exitCode: 0 };
+      }
+      const projectDir = data.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+      const freezePath = join(projectDir, '.claude', 'freeze.json');
+      if (!existsSync(freezePath)) {
+        return { exitCode: 0 };
+      }
+      try {
+        const freezeData = JSON.parse(readFileSync(freezePath, 'utf8'));
+        const lockedDirs: string[] = freezeData.locked_dirs;
+        if (!Array.isArray(lockedDirs) || lockedDirs.length === 0) {
+          return { exitCode: 0 };
+        }
+        const resolvedFile = resolve(projectDir, file);
+        const isInLockedDir = lockedDirs.some(dir => {
+          const resolvedDir = resolve(projectDir, dir);
+          return resolvedFile.startsWith(resolvedDir + '/') || resolvedFile.startsWith(resolvedDir + '\\');
+        });
+        if (!isInLockedDir) {
+          return {
+            exitCode: 2,
+            jsonOutput: {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: `File ${file} is outside locked directories: ${lockedDirs.join(', ')}`
+              }
+            }
+          };
+        }
+      } catch {
+        // Ignore parse errors - if freeze.json is invalid, allow edits
       }
       return { exitCode: 0 };
     }

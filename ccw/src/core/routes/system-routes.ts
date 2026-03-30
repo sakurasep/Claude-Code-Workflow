@@ -822,7 +822,7 @@ export async function handleSystemRoutes(ctx: SystemRouteContext): Promise<boole
       return new Promise<Record<string, unknown>>((resolve) => {
         if (process.platform === 'win32') {
           const script = `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.SelectedPath = '${startDir.replace(/'/g, "''")}'; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }`;
-          execFile('powershell', ['-NoProfile', '-Command', script],
+          execFile('powershell', ['-NoProfile', '-Sta', '-Command', script],
             { timeout: 120000 },
             (err, stdout) => {
               if (err || !stdout.trim()) {
@@ -879,7 +879,7 @@ export async function handleSystemRoutes(ctx: SystemRouteContext): Promise<boole
       return new Promise<Record<string, unknown>>((resolve) => {
         if (process.platform === 'win32') {
           const script = `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.OpenFileDialog; $d.InitialDirectory = '${startDir.replace(/'/g, "''")}'; if ($d.ShowDialog() -eq 'OK') { $d.FileName }`;
-          execFile('powershell', ['-NoProfile', '-Command', script],
+          execFile('powershell', ['-NoProfile', '-Sta', '-Command', script],
             { timeout: 120000 },
             (err, stdout) => {
               if (err || !stdout.trim()) {

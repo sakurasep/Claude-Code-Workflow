@@ -541,6 +541,49 @@ export async function handleCliRoutes(ctx: RouteContext): Promise<boolean> {
     return true;
   }
 
+  // API: Parse Claude settings file and extract model configuration
+  if (pathname === '/api/cli/parse-settings' && req.method === 'POST') {
+    handlePostRequest(req, res, async (body: unknown) => {
+      const { path: filePath } = body as { path?: string };
+      if (!filePath || typeof filePath !== 'string') {
+        return { error: 'File path is required', status: 400 };
+      }
+
+      const fs = await import('fs/promises');
+      const resolvedPath = resolve(filePath);
+
+      try {
+        const content = await fs.readFile(resolvedPath, 'utf-8');
+        const settings = JSON.parse(content);
+        const env = settings.env || {};
+
+        // Extract model values from ANTHROPIC_* env vars
+        const primaryModel = env.ANTHROPIC_MODEL || '';
+        const secondaryModel = env.ANTHROPIC_DEFAULT_HAIKU_MODEL || '';
+
+        // Collect all unique model values from ANTHROPIC_* env vars
+        const modelKeys = Object.keys(env).filter((k: string) =>
+          k.startsWith('ANTHROPIC_') && k.includes('MODEL')
+        );
+        const availableModels = [...new Set(
+          modelKeys.map((k: string) => env[k]).filter((v: string) => v && typeof v === 'string')
+        )] as string[];
+
+        return { primaryModel, secondaryModel, availableModels };
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes('ENOENT')) {
+          return { error: `File not found: ${resolvedPath}`, status: 404 };
+        }
+        if (msg.includes('JSON')) {
+          return { error: `Invalid JSON in file: ${resolvedPath}`, status: 400 };
+        }
+        return { error: msg, status: 500 };
+      }
+    });
+    return true;
+  }
+
   // API: Get/Update Tool Config
   const configMatch = pathname.match(/^\/api\/cli\/config\/(gemini|qwen|codex|claude|opencode)$/);
   if (configMatch) {

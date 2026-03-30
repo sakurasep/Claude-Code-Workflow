@@ -232,6 +232,25 @@ export async function initializeCsrfToken(): Promise<void> {
   }
 }
 
+// ========== Auth Initialization ==========
+
+/**
+ * Acquire auth cookie from server.
+ * On localhost the auth middleware bypasses public paths, so the cookie is
+ * redundant but harmless.  For remote access (--host 0.0.0.0) the cookie
+ * is required — without it every API call returns 401.
+ *
+ * Must be called once before the React tree renders so that TanStack Query
+ * hooks already have the cookie when they fire their first requests.
+ */
+export async function initializeAuth(): Promise<void> {
+  try {
+    await fetch('/api/auth/token', { credentials: 'same-origin' });
+  } catch {
+    // Server may not be reachable yet — localhost public-path bypass still works
+  }
+}
+
 // ========== Base Fetch Wrapper ==========
 
 /**

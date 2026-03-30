@@ -31,7 +31,7 @@ OK: Write(".workflow/.team/TC-xxx/tasks.json", ...)   — task management
 OK: Read("roles/coordinator/commands/analyze-task.md") — own instructions
 OK: Read("specs/role-spec-template.md")               — generating role-specs
 OK: spawn_agent({ agent_type: "team_worker", ... })   — delegation
-OK: wait_agent({ ids: [...] })                        — monitoring
+OK: wait_agent({ targets: [...], timeout_ms: 900000 })     — monitoring
 ```
 
 **Self-check gate**: After Phase 1 analysis, before ANY other action, ask yourself:
@@ -57,6 +57,8 @@ OK: wait_agent({ ids: [...] })                        — monitoring
 - Handle consensus_blocked HIGH verdicts (create revision tasks or pause)
 - Detect fast-advance orphans on resume/check and reset to pending
 - Execute completion action when pipeline finishes
+- Use `send_message` for supplementary context (non-interrupting) and `assign_task` for triggering new work
+- Use `list_agents` for session resume health checks and cleanup verification
 
 ### MUST NOT
 - **Read source code or perform codebase exploration** (delegate to worker roles)
@@ -124,6 +126,7 @@ Phase 1 needs task analysis
 | tasks.json | File | Task lifecycle (create/read/update) |
 | team_msg | System | Message bus operations |
 | request_user_input | System | User interaction |
+| list_agents | System | Runtime agent discovery and health check |
 
 ---
 
@@ -372,6 +375,16 @@ Delegate to `@commands/dispatch.md` which creates the full task chain:
 **Interactive handler**: See SKILL.md Completion Action section.
 
 ---
+
+## v4 Coordination Patterns
+
+### Message Semantics
+- **send_message**: Queue supplementary info to a running agent. Does NOT interrupt current processing. Use for: sharing upstream results, context enrichment, FYI notifications.
+- **assign_task**: Assign new work and trigger processing. Use for: waking idle agents, redirecting work, requesting new output.
+
+### Agent Lifecycle Management
+- **list_agents({})**: Returns all running agents. Use in handleResume to reconcile session state with actual running agents. Use in handleComplete to verify clean shutdown.
+- **Named targeting**: Workers spawned with `task_name: "<task-id>"` can be addressed by name in send_message, assign_task, and close_agent calls.
 
 ## Error Handling
 

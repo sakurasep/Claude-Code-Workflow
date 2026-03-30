@@ -21,10 +21,7 @@ export interface UnsplashSearchResult {
   totalPages: number;
 }
 
-function getCsrfToken(): string | null {
-  const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
+import { fetchApi } from './api';
 
 /**
  * Search Unsplash photos via backend proxy.
@@ -40,16 +37,7 @@ export async function searchUnsplash(
     per_page: String(perPage),
   });
 
-  const response = await fetch(`/api/unsplash/search?${params}`, {
-    credentials: 'same-origin',
-  });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Unsplash search failed: ${response.status}`);
-  }
-
-  return response.json();
+  return fetchApi<UnsplashSearchResult>(`/api/unsplash/search?${params}`);
 }
 
 /**
@@ -57,46 +45,22 @@ export async function searchUnsplash(
  * Sends raw binary to avoid base64 overhead.
  */
 export async function uploadBackgroundImage(file: File): Promise<{ url: string; filename: string }> {
-  const headers: Record<string, string> = {
-    'Content-Type': file.type,
-    'X-Filename': encodeURIComponent(file.name),
-  };
-  const csrfToken = getCsrfToken();
-  if (csrfToken) {
-    headers['X-CSRF-Token'] = csrfToken;
-  }
-
-  const response = await fetch('/api/background/upload', {
+  return fetchApi<{ url: string; filename: string }>('/api/background/upload', {
     method: 'POST',
-    headers,
-    credentials: 'same-origin',
+    headers: {
+      'Content-Type': file.type,
+      'X-Filename': encodeURIComponent(file.name),
+    },
     body: file,
   });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Upload failed: ${response.status}`);
-  }
-
-  return response.json();
 }
 
 /**
  * Trigger Unsplash download event (required by API guidelines).
  */
 export async function triggerUnsplashDownload(downloadLocation: string): Promise<void> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  const csrfToken = getCsrfToken();
-  if (csrfToken) {
-    headers['X-CSRF-Token'] = csrfToken;
-  }
-
-  await fetch('/api/unsplash/download', {
+  await fetchApi('/api/unsplash/download', {
     method: 'POST',
-    headers,
-    credentials: 'same-origin',
     body: JSON.stringify({ downloadLocation }),
   });
 }

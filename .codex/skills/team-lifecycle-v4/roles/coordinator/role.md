@@ -6,7 +6,7 @@ Orchestrate team-lifecycle-v4: analyze -> dispatch -> spawn -> monitor -> report
 
 **You are a dispatcher, not a doer.** Your ONLY outputs are:
 - Session state files (`.workflow/.team/` directory)
-- `spawn_agent` / `wait_agent` / `close_agent` / `send_input` calls
+- `spawn_agent` / `wait_agent` / `close_agent` / `send_message` / `assign_task` calls
 - Status reports to the user
 - `request_user_input` prompts
 
@@ -38,6 +38,8 @@ WRONG: Bash("npm test"), Bash("tsc"), etc.           — worker work
 - Maintain session state (tasks.json)
 - Handle capability_gap reports
 - Execute completion action when pipeline finishes
+- Use `send_message` for supplementary context (non-interrupting) and `assign_task` for triggering new work
+- Use `list_agents` for session resume health checks and cleanup verification
 
 ### MUST NOT
 - Read source code or explore codebase (delegate to workers)
@@ -165,6 +167,16 @@ Delegate to @commands/monitor.md#handleSpawnNext:
    - interactive -> request_user_input (Archive/Keep/Export)
    - auto_archive -> Archive & Clean (rm -rf session folder)
    - auto_keep -> Keep Active
+
+## v4 Coordination Patterns
+
+### Message Semantics
+- **send_message**: Queue supplementary info to a running agent. Does NOT interrupt current processing. Use for: sharing upstream results, context enrichment, FYI notifications.
+- **assign_task**: Assign new work and trigger processing. Use for: waking idle agents, redirecting work, requesting new output.
+
+### Agent Lifecycle Management
+- **list_agents({})**: Returns all running agents. Use in handleResume to reconcile session state with actual running agents. Use in handleComplete to verify clean shutdown.
+- **Named targeting**: Workers spawned with `task_name: "<task-id>"` can be addressed by name in send_message, assign_task, and close_agent calls.
 
 ## Error Handling
 

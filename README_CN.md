@@ -95,6 +95,7 @@ ccw install -m Global
 [features]
 default_mode_request_user_input = true   # 启用 request_user_input 工具，用于交互式确认
 multi_agent = true                       # 启用多智能体协调（spawn_agent、wait 等）
+multi_agent_v2 = true                    # 启用 v4 智能体 API（fork_context、task_name、send_message、assign_task、list_agents）
 enable_fanout = true                     # 启用 spawn_agents_on_csv 并行波次执行
 ```
 
@@ -408,6 +409,14 @@ v2 团队架构引入了**事件驱动的节拍模型**，实现高效编排：
 - 📦 预构建工作流的模板库
 - 🔧 节点配置属性面板
 - ⚡ 斜杠命令集成
+
+---
+
+## 🙏 致谢
+
+- **[Impeccable](https://github.com/pbakaus/impeccable)** — 设计审计方法论、OKLCH 色彩系统、anti-AI-slop 检测模式、编辑级排版标准、动效/动画 token 体系、以及原生 JS 交互模式。UI 团队技能（`team-ui-polish`、`team-interactive-craft`、`team-motion-design`、`team-visual-a11y`、`team-uidesign`、`team-ux-improve`）大量借鉴了 Impeccable 的设计知识。
+
+- **[gstack](https://github.com/garrytan/gstack)** — 系统化调试方法论、安全审计框架与发布流水线模式。`investigate`（Iron Law 调试）、`security-audit`（OWASP Top 10 + STRIDE）、`ship`（门控发布流水线）三个技能的设计灵感来源于 gstack 的工作流设计。
 
 ---
 

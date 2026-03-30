@@ -1,6 +1,6 @@
 ---
 name: review-cycle
-description: Unified multi-dimensional code review with automated fix orchestration. Supports session-based (git changes) and module-based (path patterns) review modes with 7-dimension parallel analysis, iterative deep-dive, and automated fix pipeline. Triggers on "workflow:review-cycle", "workflow:review-session-cycle", "workflow:review-module-cycle", "workflow:review-cycle-fix".
+description: "Unified multi-dimensional code review with automated fix orchestration. Supports session-based (git changes) and module-based (path patterns) review modes with 7-dimension parallel analysis, iterative deep-dive, and automated fix pipeline. Triggers on \"workflow:review-cycle\", \"workflow:review-session-cycle\", \"workflow:review-module-cycle\", \"workflow:review-cycle-fix\"."
 ---
 
 # Review Cycle
@@ -316,18 +316,18 @@ ${deliverables}
 })
 ```
 
-### wait
+### wait_agent
 
 Get results from subagent (only way to retrieve results).
 
 ```javascript
-const result = wait({
-  ids: [agentId],
+const result = wait_agent({
+  targets: [agentId],
   timeout_ms: 600000  // 10 minutes
 })
 
 if (result.timed_out) {
-  // Handle timeout - can continue waiting or send_input to prompt completion
+  // Handle timeout - can use assign_task to prompt completion
 }
 
 // Check completion status
@@ -336,20 +336,20 @@ if (result.status[agentId].completed) {
 }
 ```
 
-### send_input
+### assign_task
 
-Continue interaction with active subagent (for clarification or follow-up).
+Assign new work to active subagent (for clarification or follow-up).
 
 ```javascript
-send_input({
-  id: agentId,
-  message: `
+assign_task({
+  target: agentId,
+  items: [{ type: "text", text: `
 ## CLARIFICATION ANSWERS
 ${answers}
 
 ## NEXT STEP
 Continue with analysis generation.
-`
+` }]
 })
 ```
 

@@ -59,16 +59,13 @@ import {
   useExportSettings,
   useImportSettings,
 } from '@/hooks/useSystemSettings';
+import { fetchApi } from '@/lib/api';
 import type { ExportedSettings } from '@/lib/api';
 import { RemoteNotificationSection } from '@/components/settings/RemoteNotificationSection';
 import { A2UIPreferencesSection } from '@/components/settings/A2UIPreferencesSection';
 import { AgentDefinitionsSection } from '@/components/settings/AgentDefinitionsSection';
 
-// ========== CSRF Token Helper ==========
-function getCsrfToken(): string | null {
-  const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
+// CSRF tokens are managed by fetchApi from lib/api.ts (token pool pattern)
 
 // ========== File Path Input with Native File Picker ==========
 
@@ -1304,9 +1301,31 @@ export function SettingsPage() {
     updateCliTool(toolId, { envFile });
   };
 
-  const handleUpdateSettingsFile = (toolId: string, settingsFile: string | undefined) => {
+  const handleUpdateSettingsFile = useCallback(async (toolId: string, settingsFile: string | undefined) => {
     updateCliTool(toolId, { settingsFile });
-  };
+
+    // Auto-parse models from settings file
+    if (settingsFile && SETTINGS_FILE_TOOLS.has(toolId)) {
+      try {
+        const data = await fetchApi<{ primaryModel?: string; secondaryModel?: string; availableModels?: string[] }>(
+          '/api/cli/parse-settings',
+          { method: 'POST', body: JSON.stringify({ path: settingsFile }) }
+        );
+        if (data.primaryModel || data.secondaryModel || data.availableModels?.length) {
+          const updates: Partial<{ primaryModel: string; secondaryModel: string; availableModels: string[] }> = {};
+          if (data.primaryModel) updates.primaryModel = data.primaryModel;
+          if (data.secondaryModel) updates.secondaryModel = data.secondaryModel;
+          if (data.availableModels?.length) updates.availableModels = data.availableModels;
+          updateCliTool(toolId, updates);
+          toast.success(`Models loaded from settings: ${data.primaryModel || 'default'}`, {
+            duration: 3000,
+          });
+        }
+      } catch {
+        // Silently fail — file parsing is best-effort
+      }
+    }
+  }, [updateCliTool]);
 
   const handleUpdateEffort = (toolId: string, effort: string | undefined) => {
     updateCliTool(toolId, { effort });
@@ -1336,22 +1355,10 @@ export function SettingsPage() {
         body.effort = config.effort || null;
       }
 
-      const csrfToken = getCsrfToken();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (csrfToken) {
-        headers['X-CSRF-Token'] = csrfToken;
-      }
-
-      const res = await fetch(`/api/cli/config/${toolId}`, {
+      await fetchApi(`/api/cli/config/${toolId}`, {
         method: 'PUT',
-        headers,
         body: JSON.stringify(body),
-        credentials: 'same-origin',
       });
-
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
 
       toast.success(formatMessage({ id: 'settings.cliTools.configSaved' }), {
         description: toolId,

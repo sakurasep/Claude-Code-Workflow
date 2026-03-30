@@ -27,6 +27,7 @@ import * as contextCacheMod from './context-cache.js';
 import * as skillContextLoaderMod from './skill-context-loader.js';
 import * as askQuestionMod from './ask-question.js';
 import * as teamMsgMod from './team-msg.js';
+import * as jsonBuilderMod from './json-builder.js';
 
 
 // Import legacy JS tools
@@ -315,6 +316,7 @@ registerTool(toLegacyTool(contextCacheMod));
 registerTool(toLegacyTool(skillContextLoaderMod));
 registerTool(toLegacyTool(askQuestionMod));
 registerTool(toLegacyTool(teamMsgMod));
+registerTool(toLegacyTool(jsonBuilderMod));
 
 // Register legacy JS tools
 registerTool(uiGeneratePreviewTool);

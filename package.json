@@ -1,6 +1,6 @@
 {
   "name": "claude-code-workflow",
-  "version": "7.2.21",
+  "version": "7.2.29",
   "description": "JSON-driven multi-agent development framework with intelligent CLI orchestration (Gemini/Qwen/Codex), context-first architecture, and automated workflow execution",
   "type": "module",
   "main": "ccw/dist/index.js",
